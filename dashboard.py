@@ -5,7 +5,8 @@ dashboard.py - Local web dashboard served on localhost:8080.
 import json
 import os
 import sqlite3
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse
 from pathlib import Path
 from datetime import datetime
 
@@ -20,10 +21,12 @@ def get_dashboard_data(db_path=DB_PATH):
     conn.row_factory = sqlite3.Row
 
     # ── All models (for filter UI) ────────────────────────────────────────────
+    # GROUP BY uses the normalised expression too so NULL and '' don't end up
+    # as two separate "unknown" rows.
     model_rows = conn.execute("""
-        SELECT COALESCE(model, 'unknown') as model
+        SELECT COALESCE(NULLIF(model, ''), 'unknown') as model
         FROM turns
-        GROUP BY model
+        GROUP BY COALESCE(NULLIF(model, ''), 'unknown')
         ORDER BY SUM(input_tokens + output_tokens) DESC
     """).fetchall()
     all_models = [r["model"] for r in model_rows]
@@ -32,14 +35,14 @@ def get_dashboard_data(db_path=DB_PATH):
     daily_rows = conn.execute("""
         SELECT
             substr(timestamp, 1, 10)   as day,
-            COALESCE(model, 'unknown') as model,
+            COALESCE(NULLIF(model, ''), 'unknown') as model,
             SUM(input_tokens)          as input,
             SUM(output_tokens)         as output,
             SUM(cache_read_tokens)     as cache_read,
             SUM(cache_creation_tokens) as cache_creation,
             COUNT(*)                   as turns
         FROM turns
-        GROUP BY day, model
+        GROUP BY day, COALESCE(NULLIF(model, ''), 'unknown')
         ORDER BY day, model
     """).fetchall()
 
@@ -59,12 +62,12 @@ def get_dashboard_data(db_path=DB_PATH):
         SELECT
             substr(timestamp, 1, 10)                  as day,
             CAST(substr(timestamp, 12, 2) AS INTEGER) as hour,
-            COALESCE(model, 'unknown')                as model,
+            COALESCE(NULLIF(model, ''), 'unknown')    as model,
             SUM(output_tokens)                        as output,
             COUNT(*)                                  as turns
         FROM turns
         WHERE timestamp IS NOT NULL AND length(timestamp) >= 13
-        GROUP BY day, hour, model
+        GROUP BY day, hour, COALESCE(NULLIF(model, ''), 'unknown')
         ORDER BY day, hour, model
     """).fetchall()
 
@@ -235,6 +238,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="filter-sep"></div>
   <div class="filter-label">Range</div>
   <div class="range-group">
+    <button class="range-btn" data-range="today" onclick="setRange('today')">Today</button>
     <button class="range-btn" data-range="week" onclick="setRange('week')">This Week</button>
     <button class="range-btn" data-range="month" onclick="setRange('month')">This Month</button>
     <button class="range-btn" data-range="prev-month" onclick="setRange('prev-month')">Prev Month</button>
@@ -481,8 +485,8 @@ const TOKEN_COLORS = {
 const MODEL_COLORS = ['#d97757','#4f8ef7','#4ade80','#a78bfa','#fbbf24','#f472b6','#34d399','#60a5fa'];
 
 // ── Time range ─────────────────────────────────────────────────────────────
-const RANGE_LABELS = { 'week': 'This Week', 'month': 'This Month', 'prev-month': 'Previous Month', '7d': 'Last 7 Days', '30d': 'Last 30 Days', '90d': 'Last 90 Days', 'all': 'All Time' };
-const RANGE_TICKS  = { 'week': 7, 'month': 15, 'prev-month': 15, '7d': 7, '30d': 15, '90d': 13, 'all': 12 };
+const RANGE_LABELS = { 'today': 'Today', 'week': 'This Week', 'month': 'This Month', 'prev-month': 'Previous Month', '7d': 'Last 7 Days', '30d': 'Last 30 Days', '90d': 'Last 90 Days', 'all': 'All Time' };
+const RANGE_TICKS  = { 'today': 1, 'week': 7, 'month': 15, 'prev-month': 15, '7d': 7, '30d': 15, '90d': 13, 'all': 12 };
 const VALID_RANGES = Object.keys(RANGE_LABELS);
 
 function rangeIncludesToday(range) {
@@ -498,6 +502,10 @@ function getRangeBounds(range) {
   if (range === 'all') return { start: null, end: null };
   const today = new Date();
   const iso = d => d.toISOString().slice(0, 10);
+  if (range === 'today') {
+    const t = iso(today);
+    return { start: t, end: t };
+  }
   if (range === 'week') {
     const day = today.getDay();
     const diffToMon = day === 0 ? 6 : day - 1;
@@ -555,15 +563,21 @@ function modelPriority(m) {
 
 function readURLModels(allModels) {
   const param = new URLSearchParams(window.location.search).get('models');
-  if (!param) return new Set(allModels.filter(m => isBillable(m)));
+  if (!param) {
+    const billable = allModels.filter(m => isBillable(m));
+    // Fallback: if the user only has non-billable / unknown models (e.g. all
+    // local-LLM runs), default to all models so the dashboard isn't blank.
+    return new Set(billable.length ? billable : allModels);
+  }
   const fromURL = new Set(param.split(',').map(s => s.trim()).filter(Boolean));
   return new Set(allModels.filter(m => fromURL.has(m)));
 }
 
 function isDefaultModelSelection(allModels) {
   const billable = allModels.filter(m => isBillable(m));
-  if (selectedModels.size !== billable.length) return false;
-  return billable.every(m => selectedModels.has(m));
+  const expected = billable.length ? billable : allModels;
+  if (selectedModels.size !== expected.length) return false;
+  return expected.every(m => selectedModels.has(m));
 }
 
 function buildFilterUI(allModels) {
@@ -742,7 +756,7 @@ function applyFilter() {
 
   // Hourly aggregation (filtered by model + range, then bucketed by UTC hour)
   const hourlySrc = (rawData.hourly_by_model || []).filter(r =>
-    selectedModels.has(r.model) && (!cutoff || r.day >= cutoff)
+    selectedModels.has(r.model) && (!start || r.day >= start) && (!end || r.day <= end)
   );
   const hourlyAgg = aggregateHourly(hourlySrc, hourlyTZ);
 
@@ -1242,13 +1256,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
+        # self.path includes the query string, but every URL the UI emits has
+        # one (e.g. "/?range=all"); compare the bare path so bookmarkable
+        # URLs don't fall through to 404.
+        path = urlparse(self.path).path
+        if path in ("/", "/index.html"):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             self.wfile.write(HTML_TEMPLATE.encode("utf-8"))
 
-        elif self.path == "/api/data":
+        elif path == "/api/data":
             data = get_dashboard_data()
             body = json.dumps(data).encode("utf-8")
             self.send_response(200)
@@ -1262,7 +1280,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
-        if self.path == "/api/rescan":
+        path = urlparse(self.path).path
+        if path == "/api/rescan":
             # Full rebuild: delete DB and rescan from scratch.
             # Pass DB_PATH / DEFAULT_PROJECTS_DIRS explicitly so tests that
             # patch the module globals are honored (scan's defaults are
@@ -1290,7 +1309,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 def serve(host=None, port=None):
     host = host or os.environ.get("HOST", "localhost")
     port = port or int(os.environ.get("PORT", "8080"))
-    server = HTTPServer((host, port), DashboardHandler)
+    server = ThreadingHTTPServer((host, port), DashboardHandler)
     print(f"Dashboard running at http://{host}:{port}")
     print("Press Ctrl+C to stop.")
     try:
