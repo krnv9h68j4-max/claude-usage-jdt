@@ -60,18 +60,6 @@ cd claude-usage
 python cli.py dashboard
 ```
 
-### VS Code extension
-
-The dashboard also runs as a VS Code extension that lives in the activity-bar sidebar — no separate browser tab needed.
-
-```
-git clone https://github.com/phuryn/claude-usage
-cd claude-usage/vscode-extension
-./scripts/install.sh        # macOS / Linux / WSL
-.\scripts\install.ps1       # Windows
-```
-
-The extension auto-discovers `claude-usage` on `PATH` (Homebrew users get it for free) or the repo's `cli.py` (clone users). Open via Command Palette → **Claude Usage: Open Dashboard**. See [vscode-extension/](vscode-extension/) for details.
 
 ---
 
@@ -137,6 +125,21 @@ Costs are calculated using **Anthropic API pricing as of April 2026** ([claude.c
 | claude-haiku-4-5 | $1.00/MTok | $5.00/MTok | $1.25/MTok | $0.10/MTok |
 
 > **Note:** These are API prices. If you use Claude Code via a Max or Pro subscription, your actual cost structure is different (subscription-based, not per-token).
+
+---
+
+## VS Code extension
+
+If you'd rather see the dashboard inside your editor, the same UI is available as a VS Code extension. Same data, same charts, embedded as an activity-bar sidebar.
+
+[**Install from the VS Code Marketplace →**](https://marketplace.visualstudio.com/items?itemName=PawelHuryn.claude-usage-phuryn)
+
+![VS Code extension — daily usage](docs/usage1.png)
+![VS Code extension — hourly + projects](docs/usage2.png)
+
+The Python sources are bundled inside the `.vsix`, so the only end-user requirement is **Python 3.8+ on your `PATH`**. After install, click the gauge icon in the activity bar — the server spawns automatically and the dashboard renders in the sidebar.
+
+See [vscode-extension/README.md](vscode-extension/README.md) for settings, commands, discovery order, and local-install instructions.
 
 ---
 

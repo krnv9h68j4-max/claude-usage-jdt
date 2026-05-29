@@ -84,6 +84,11 @@ export class DashboardSidebar implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   private currentUrl: string | null = null;
   private statusText = "";
+  private readonly onShow: () => void;
+
+  constructor(onShow: () => void = () => {}) {
+    this.onShow = onShow;
+  }
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
@@ -92,6 +97,10 @@ export class DashboardSidebar implements vscode.WebviewViewProvider {
     view.onDidDispose(() => {
       this.view = undefined;
     });
+    // Kick the host to start the server now that the user has revealed the
+    // panel. extension.ts wires this to openDashboard(); the in-flight
+    // coalescing on that side means clicking the icon repeatedly is safe.
+    this.onShow();
   }
 
   /** Called from extension.ts after the server is ready. */
