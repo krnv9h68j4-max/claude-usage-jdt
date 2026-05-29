@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as path from "node:path";
 import { locatePython } from "./python-locator";
 import { resolveInstallMode, dashboardSpawnArgs, InstallMode } from "./install-mode";
 import { resolvePort } from "./port-allocator";
@@ -24,7 +25,12 @@ class Extension {
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
     this.output = vscode.window.createOutputChannel("Claude Usage");
-    this.sidebar = new DashboardSidebar();
+    // The sidebar invokes onShow when VS Code reveals the webview — that's
+    // when the user clicked the activity-bar icon, so it's the right moment
+    // to spawn the server. openDashboard() coalesces repeat calls.
+    this.sidebar = new DashboardSidebar(() => {
+      void this.openDashboard();
+    });
 
     context.subscriptions.push(
       this.output,
@@ -70,12 +76,19 @@ class Extension {
     const host = "127.0.0.1";
     const configuredPort = config.get<number>("port", 0);
 
+    const workspaceFolders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+    const extensionDir = this.context.extensionUri.fsPath;
+    // Bundled python sources live at <extensionDir>/python/cli.py — copied
+    // there from the repo root by scripts/copy-python.js at package time.
+    const bundledCliPath = path.join(extensionDir, "python", "cli.py");
     const mode = resolveInstallMode({
       configuredCliPath: configuredCli,
-      extensionDir: this.context.extensionUri.fsPath,
+      bundledCliPath,
+      extensionDir,
+      workspaceFolders,
     });
     if (mode.kind === "none") {
-      const msg = "Could not find a claude-usage install. Install via Homebrew or set claudeUsage.cliPath to a clone's cli.py.";
+      const msg = noInstallMessage();
       this.output.appendLine(msg);
       this.sidebar.setStatus(msg);
       vscode.window.showErrorMessage(msg);
@@ -84,10 +97,12 @@ class Extension {
 
     const python = mode.kind === "clone" ? locatePython(configuredPython) : undefined;
     if (mode.kind === "clone" && !python) {
-      const msg = "Could not find Python 3 on PATH. Install Python or set claudeUsage.pythonPath.";
+      const msg = noPythonMessage();
       this.output.appendLine(msg);
       this.sidebar.setStatus(msg);
-      vscode.window.showErrorMessage(msg);
+      vscode.window.showErrorMessage(
+        "Claude Usage needs Python 3.8+ on PATH. See the dashboard panel for install links.",
+      );
       return;
     }
 
@@ -168,6 +183,42 @@ function describeMode(mode: InstallMode): string {
   if (mode.kind === "brew") return `brew (${mode.binary})`;
   if (mode.kind === "clone") return `clone (${mode.cliPy})`;
   return "none";
+}
+
+/**
+ * Friendly "no install found" message. With the bundled Python sources this
+ * should be virtually unreachable in a packaged extension — only fires when
+ * the user explicitly sets claudeUsage.cliPath to a path that doesn't exist
+ * AND no PATH/workspace/sibling fallback succeeds.
+ */
+export function noInstallMessage(): string {
+  return [
+    "Could not find a claude-usage install. This is unexpected for a marketplace install.",
+    "Check your claudeUsage.cliPath setting (clear it to fall back to the bundled sources),",
+    "and use Claude Usage: Show Logs to see what was tried.",
+  ].join("\n");
+}
+
+/**
+ * Friendly "no Python found" message. This is the most likely failure for
+ * a fresh marketplace install on a machine without Python — common on
+ * Windows. Points the user at python.org with concrete next steps.
+ */
+export function noPythonMessage(platform: NodeJS.Platform = process.platform): string {
+  const installHint =
+    platform === "win32"
+      ? "Install Python 3.8+ from https://www.python.org/downloads/windows/ (make sure to check 'Add Python to PATH' during install)."
+      : platform === "darwin"
+      ? "Install Python 3.8+ with: brew install python  (or from https://www.python.org/downloads/macos/)."
+      : "Install Python 3.8+ via your distro's package manager (e.g. apt install python3).";
+  return [
+    "Claude Usage needs Python 3.8 or newer on your PATH.",
+    "",
+    installHint,
+    "",
+    "After installing, reload this VS Code window (Cmd/Ctrl+Shift+P → Developer: Reload Window).",
+    "If Python is already installed in a non-standard location, set claudeUsage.pythonPath in settings.",
+  ].join("\n");
 }
 
 let extension: Extension | undefined;

@@ -83,6 +83,58 @@ describe("resolveInstallMode", () => {
     }
   });
 
+  it("discovers cli.py in a VS Code workspace folder (the Windows clone case)", () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "install-mode-ws-"));
+    const cli = path.join(ws, "cli.py");
+    fs.writeFileSync(cli, "# placeholder\n");
+    try {
+      const mode = resolveInstallMode({
+        configuredCliPath: "",
+        workspaceFolders: [ws],
+        env: cleanEnv,
+      });
+      expect(mode).toEqual({ kind: "clone", cliPy: cli });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it("scans multiple workspace folders, returns first match", () => {
+    const ws1 = fs.mkdtempSync(path.join(os.tmpdir(), "install-mode-ws1-"));
+    const ws2 = fs.mkdtempSync(path.join(os.tmpdir(), "install-mode-ws2-"));
+    const cli2 = path.join(ws2, "cli.py");
+    fs.writeFileSync(cli2, "# placeholder\n");
+    try {
+      // ws1 first, has no cli.py — ws2 should win.
+      const mode = resolveInstallMode({
+        configuredCliPath: "",
+        workspaceFolders: [ws1, ws2],
+        env: cleanEnv,
+      });
+      expect(mode).toEqual({ kind: "clone", cliPy: cli2 });
+    } finally {
+      fs.rmSync(ws1, { recursive: true, force: true });
+      fs.rmSync(ws2, { recursive: true, force: true });
+    }
+  });
+
+  it("brew on PATH wins over a workspace folder cli.py", () => {
+    const shim = writeShim(tmpDir, IS_WIN ? "claude-usage.exe" : "claude-usage");
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "install-mode-ws-"));
+    const cli = path.join(ws, "cli.py");
+    fs.writeFileSync(cli, "# placeholder\n");
+    try {
+      const mode = resolveInstallMode({
+        configuredCliPath: "",
+        workspaceFolders: [ws],
+        env: cleanEnv,
+      });
+      expect(mode).toEqual({ kind: "brew", binary: shim });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
   it("returns none when nothing is found anywhere", () => {
     const mode = resolveInstallMode({ configuredCliPath: "", env: cleanEnv });
     expect(mode).toEqual({ kind: "none" });
@@ -91,6 +143,53 @@ describe("resolveInstallMode", () => {
   it("ignores configuredCliPath that doesn't exist", () => {
     const mode = resolveInstallMode({
       configuredCliPath: path.join(tmpDir, "no-such-cli.py"),
+      env: cleanEnv,
+    });
+    expect(mode).toEqual({ kind: "none" });
+  });
+
+  it("returns bundled clone mode when bundledCliPath exists (marketplace install)", () => {
+    const bundled = path.join(tmpDir, "cli.py");
+    fs.writeFileSync(bundled, "# bundled placeholder\n");
+    const mode = resolveInstallMode({
+      configuredCliPath: "",
+      bundledCliPath: bundled,
+      env: cleanEnv,
+    });
+    expect(mode).toEqual({ kind: "clone", cliPy: bundled });
+  });
+
+  it("bundled cli.py beats brew on PATH (extension ships its own — predictable version)", () => {
+    const shim = writeShim(tmpDir, IS_WIN ? "claude-usage.exe" : "claude-usage");
+    const bundled = path.join(tmpDir, "bundled-cli.py");
+    fs.writeFileSync(bundled, "# bundled\n");
+    const mode = resolveInstallMode({
+      configuredCliPath: "",
+      bundledCliPath: bundled,
+      env: cleanEnv,
+    });
+    expect(mode).toEqual({ kind: "clone", cliPy: bundled });
+    // shim exists but bundled won — confirm via path mismatch
+    expect((mode as { kind: "clone"; cliPy: string }).cliPy).not.toBe(shim);
+  });
+
+  it("explicit setting still wins over bundled (user override)", () => {
+    const bundled = path.join(tmpDir, "bundled-cli.py");
+    fs.writeFileSync(bundled, "# bundled\n");
+    const configured = path.join(tmpDir, "user-cli.py");
+    fs.writeFileSync(configured, "# user override\n");
+    const mode = resolveInstallMode({
+      configuredCliPath: configured,
+      bundledCliPath: bundled,
+      env: cleanEnv,
+    });
+    expect(mode).toEqual({ kind: "clone", cliPy: configured });
+  });
+
+  it("ignores bundledCliPath that doesn't exist (tests / pre-package)", () => {
+    const mode = resolveInstallMode({
+      configuredCliPath: "",
+      bundledCliPath: path.join(tmpDir, "not-here", "cli.py"),
       env: cleanEnv,
     });
     expect(mode).toEqual({ kind: "none" });
