@@ -78,8 +78,10 @@ describe("python-locator", () => {
       expect(findOnPath(wantedName, a + PATH_SEP + b)).toBe(inA);
     });
 
-    it("returns undefined when envPath is empty or unset", () => {
-      expect(findOnPath("python3", undefined)).toBeUndefined();
+    it("returns undefined when envPath is an empty string", () => {
+      // Note: passing undefined here would default to process.env.PATH, which
+      // is platform-dependent — that's the JS default-arg machinery, not our
+      // function's concern. We test the falsy-guard with an empty string.
       expect(findOnPath("python3", "")).toBeUndefined();
     });
 
