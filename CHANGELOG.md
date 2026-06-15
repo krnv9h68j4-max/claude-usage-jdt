@@ -2,6 +2,11 @@
 
 ## v1.2.6 — TBD
 
+### Dashboard
+
+- Added an explicit `claude-opus-4-8` entry to both pricing tables and pointed the generic `opus` fallback at it (was 4.7). 4.8 already costed correctly via the substring fallback — this guards against silent mis-costing if 4.8 is ever repriced, and keeps the catch-all on the newest Opus (#133, #134, thanks @Ninhache).
+- Added the `claude-fable-5`, `claude-mythos-5`, and `claude-opus-4-8` rows to the README cost table (they were already in the live CLI/dashboard tables) and listed `fable` / `mythos` in the README's "included models" note, so the docs match the code.
+
 ### Project / docs
 
 - Bumped GitHub Actions to their Node 24-era major versions across all workflows (`actions/checkout@v5`, `actions/setup-node@v5`, `actions/setup-python@v6`, `actions/upload-artifact@v5`), ahead of GitHub forcing Node 24 on the runners (Node 20 actions are deprecated from 2026-06-16).
