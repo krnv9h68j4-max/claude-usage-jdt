@@ -12,7 +12,7 @@ Claude Code writes detailed usage logs locally — token counts, models, session
 
 Available as a **web app** (`python cli.py dashboard`) and as a [**VS Code extension**](https://marketplace.visualstudio.com/items?itemName=PawelHuryn.claude-usage-phuryn).
 
-**Created by:** [The Product Compass Newsletter](https://www.productcompass.pm)
+**Original created by:** [The Product Compass Newsletter](https://www.productcompass.pm)
 
 ---
 
